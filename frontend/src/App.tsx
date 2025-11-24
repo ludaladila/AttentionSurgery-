@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Brain, Terminal, Download } from 'lucide-react';
+import { Brain, Terminal } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { HeadGrid } from '@/components/surgery/HeadGrid';
