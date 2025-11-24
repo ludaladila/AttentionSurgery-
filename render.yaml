@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: attention-surgery
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    disk:
+      name: model-cache
+      mountPath: /app/cache
+      sizeGB: 1

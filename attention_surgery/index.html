@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Attention Surgery V2 - Spec Implementation</title>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
+    <!-- Prop Types (Recharts Dependency) -->
+    <script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+
+    <!-- Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Recharts -->
+    <script src="https://unpkg.com/recharts@2.12.0/umd/Recharts.js"></script>
+
+    <style>
+        body { background-color: #020617; color: #e2e8f0; font-family: 'Inter', system-ui, sans-serif; }
+        
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+        /* Animation */
+        .animate-fade-in { animation: fadeIn 0.4s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        
+        .head-cell { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+        .head-cell:hover { transform: scale(1.2); z-index: 20; box-shadow: 0 0 15px rgba(255,255,255,0.2); }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // --- FIX: Suppress Recharts defaultProps Warnings ---
+        // 这些警告来自 Recharts 库内部，暂时无法修复库文件。
+        // 为了保持控制台整洁，我们在开发模式下忽略特定的 defaultProps 警告。
+        const originalConsoleError = console.error;
+        console.error = (...args) => {
+            if (typeof args[0] === 'string' && /Support for defaultProps will be removed/.test(args[0])) {
+                return;
+            }
+            originalConsoleError(...args);
+        };
+
+        const { useState, useEffect, useMemo } = React;
+        const { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } = Recharts;
+
+        // --- 1. Icons (Inline SVG to avoid CDN issues) ---
+        const Icon = ({ path, className, ...props }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`w-4 h-4 ${className}`} {...props}>
+                {path}
+            </svg>
+        );
+        
+        const Icons = {
+            Brain: <><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z" /></>,
+            Activity: <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />,
+            Zap: <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />,
+            FileText: <><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" /><polyline points="14 2 14 8 20 8" /></>,
+            Download: <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" x2="12" y1="15" y2="3" /></>,
+            Play: <polygon points="5 3 19 12 5 21 5 3" />,
+            Target: <><circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="6" /><circle cx="12" cy="12" r="2" /></>,
+            BarChart2: <><line x1="18" x2="18" y1="20" y2="10" /><line x1="12" x2="12" y1="20" y2="4" /><line x1="6" x2="6" y1="20" y2="14" /></>,
+            Table: <><rect width="18" height="18" x="3" y="3" rx="2" ry="2" /><line x1="3" x2="21" y1="9" y2="9" /><line x1="3" x2="21" y1="15" y2="15" /><line x1="12" x2="12" y1="3" y2="21" /></>,
+            AlertTriangle: <><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" /><line x1="12" x2="12" y1="9" y2="13" /><line x1="12" x2="12.01" y1="17" y2="17" /></>,
+            RefreshCw: <><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /><path d="M8 16H3v5" /></>,
+            GitMerge: <><circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><path d="M6 21V9a9 9 0 0 0 9 9" /></>,
+        };
+
+        // --- 2. Mock Data Logic (Back-end Simulation) ---
+        const generateMockResponse = (prompt, ablationMask) => {
+            const promptTokens = prompt.split(" ").map((t, i) => ({ id: i, text: t, prob: 1.0, isPrompt: true }));
+            
+            // 1. Control Group (原始生成)
+            const controlGen = ["Paris", ",", "city", "of", "light", "."].map((t, i) => ({
+                id: 100 + i, text: t, prob: 0.9 - (i * 0.05), isPrompt: false
+            }));
+            
+            // 2. Experimental Group (消融后生成)
+            const ablatedCount = ablationMask.flat().filter(Boolean).length;
+            const degradation = ablatedCount * 0.1;
+            
+            const ablatedGen = ["London", ",", "which", "is", "gloomy", "."].map((t, i) => ({
+                id: 200 + i, 
+                text: t, 
+                prob: Math.max(0.1, (0.9 - (i * 0.05)) - degradation), // 概率降低
+                isPrompt: false,
+                topK: [
+                    { token: t, prob: 0.5 },
+                    { token: "Paris", prob: 0.2 },
+                    { token: "Unknown", prob: 0.1 }
+                ]
+            }));
+
+            // 3. Importance Matrix (12x12)
+            const gradient_matrix = Array(12).fill().map(() => Array(12).fill().map(() => Math.random()));
+
+            // 4. Layer Impact (Logit Lens)
+            const layer_impact = Array(12).fill().map((_, i) => ({
+                layer_name: `L${i}`,
+                impact_score: Math.random() * 1.5 + (i * 0.1) // 模拟深层影响更大
+            }));
+
+            // 5. Metrics
+            const metrics = {
+                kl_div: (0.1 + ablatedCount * 0.05).toFixed(4),
+                perplexity_delta: (2.0 + ablatedCount * 1.5).toFixed(2),
+                top1_changed_ratio: Math.min(1.0, ablatedCount * 0.08).toFixed(2),
+                l2_diff: (1.5 + ablatedCount * 0.3).toFixed(2)
+            };
+
+            return {
+                metrics,
+                generation: {
+                    control_tokens: [...promptTokens, ...controlGen],
+                    ablated_tokens: [...promptTokens, ...ablatedGen]
+                },
+                importance_scores: { gradient_matrix },
+                layer_impact
+            };
+        };
+
+        // --- 3. Components ---
+
+        // 头部网格组件
+        const HeadGrid = ({ mask, importance, onToggle, mode }) => {
+            const layers = 12;
+            const heads = 12;
+
+            const getColor = (l, h) => {
+                const isAblated = mask[l][h];
+                if (isAblated) return 'bg-rose-500 shadow-[0_0_10px_rgba(244,63,94,0.6)] border-rose-400 z-10';
+                
+                if (mode === 'importance' && importance) {
+                    const score = importance[l][h]; // Index into 2D array
+                    // Heatmap logic: Green (0) -> Yellow (0.5) -> Orange (1.0)
+                    if (score > 0.8) return 'bg-orange-500 border-orange-400';
+                    if (score > 0.6) return 'bg-yellow-500/90 border-yellow-400';
+                    if (score > 0.4) return 'bg-yellow-600/50 border-yellow-600/50';
+                    return 'bg-emerald-900/20 border-emerald-800/20 opacity-40';
+                }
+
+                // Normal Structure Mode
+                return 'bg-emerald-500/20 hover:bg-emerald-500/40 border-emerald-500/30';
+            };
+
+            return (
+                <div className="bg-slate-900/80 p-5 rounded-xl border border-slate-800 backdrop-blur-sm shadow-xl">
+                    <div className="flex justify-between items-center mb-4">
+                        <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+                            <Icon path={Icons.Brain} className="text-purple-400" /> 
+                            Attention Heads
+                        </h3>
+                        {/* Legend */}
+                        <div className="flex gap-3 text-[10px] text-slate-400">
+                            {mode === 'importance' ? (
+                                <>
+                                    <div className="flex items-center gap-1"><div className="w-2 h-2 bg-emerald-900 rounded-full"></div> Low</div>
+                                    <div className="flex items-center gap-1"><div className="w-2 h-2 bg-orange-500 rounded-full"></div> High Imp</div>
+                                </>
+                            ) : (
+                                <div className="flex items-center gap-1"><div className="w-2 h-2 bg-emerald-500 rounded-full"></div> Active</div>
+                            )}
+                            <div className="flex items-center gap-1"><div className="w-2 h-2 bg-rose-500 rounded-full"></div> Ablated</div>
+                        </div>
+                    </div>
+                    
+                    <div className="grid grid-cols-[auto_1fr] gap-2 select-none">
+                        {/* Y-Axis */}
+                        <div className="flex flex-col justify-between text-[9px] text-slate-500 pr-1 py-0.5">
+                            {Array.from({length: layers}).map((_, i) => <span key={i}>L{i}</span>)}
+                        </div>
+                        
+                        {/* Grid Cells */}
+                        <div className="grid grid-cols-12 gap-1 aspect-square">
+                            {Array.from({length: layers}).map((_, l) => 
+                                Array.from({length: heads}).map((_, h) => (
+                                    <div 
+                                        key={`${l}-${h}`}
+                                        onClick={() => onToggle(l, h)}
+                                        className={`head-cell w-full h-full rounded-[2px] cursor-pointer border ${getColor(l, h)}`}
+                                        title={`L${l}H${h} ${importance ? `| Score: ${importance[l][h].toFixed(2)}` : ''}`}
+                                    />
+                                ))
+                            )}
+                        </div>
+                        
+                        {/* X-Axis */}
+                        <div></div>
+                        <div className="flex justify-between text-[9px] text-slate-500 px-0.5">
+                            {Array.from({length: heads}).filter((_,i)=>i%2==0).map((_, i) => <span key={i}>H{i*2}</span>)}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // 指标卡片
+        const MetricCard = ({ label, value, sub, color="text-purple-400" }) => (
+            <div className="bg-slate-800/40 border border-slate-700/50 p-4 rounded-lg flex flex-col items-center justify-center min-w-[100px] hover:bg-slate-800/60 transition-colors">
+                <span className="text-[10px] text-slate-400 uppercase tracking-widest mb-2 font-semibold">{label}</span>
+                <span className={`text-2xl font-bold font-mono ${color} tracking-tight`}>{value}</span>
+                {sub && <span className="text-[10px] text-slate-500 mt-1">{sub}</span>}
+            </div>
+        );
+
+        // Token 渲染器
+        const TokenList = ({ tokens }) => (
+            <div className="flex flex-wrap gap-1.5 leading-relaxed">
+                {tokens.map((t, i) => {
+                    // 动态透明度
+                    const opacity = t.isPrompt ? 0.1 : 0.2 + (t.prob * 0.6);
+                    
+                    return (
+                        <span 
+                            key={i} 
+                            className={`
+                                px-2 py-1 rounded text-sm font-mono transition-all cursor-default border border-transparent
+                                ${t.isPrompt 
+                                    ? 'bg-slate-800 text-slate-400' 
+                                    : 'bg-purple-600 text-purple-100 hover:scale-110 hover:z-10 hover:bg-purple-500'}
+                            `}
+                            style={{ backgroundColor: !t.isPrompt ? `rgba(147, 51, 234, ${opacity})` : undefined }}
+                            title={!t.isPrompt ? `Prob: ${(t.prob*100).toFixed(1)}%` : 'Prompt'}
+                        >
+                            {t.text}
+                        </span>
+                    );
+                })}
+            </div>
+        );
+
+        // --- 4. Main App ---
+        const App = () => {
+            // UI State
+            const [activeTab, setActiveTab] = useState('surgery'); 
+            const [prompt, setPrompt] = useState("The Eiffel Tower is located in the city of");
+            const [method, setMethod] = useState("zero");
+            const [gridMode, setGridMode] = useState("normal"); 
+            const [loading, setLoading] = useState(false);
+            
+            // Data State
+            const [ablationMask, setAblationMask] = useState(Array(12).fill().map(() => Array(12).fill(false)));
+            const [result, setResult] = useState(null);
+
+            useEffect(() => {
+                // Initial Run Placeholder
+            }, []);
+
+            // Handlers
+            const toggleHead = (l, h) => {
+                const newMask = [...ablationMask];
+                newMask[l] = [...newMask[l]];
+                newMask[l][h] = !newMask[l][h];
+                setAblationMask(newMask);
+            };
+
+            const runInference = () => {
+                setLoading(true);
+                setTimeout(() => {
+                    const mockData = generateMockResponse(prompt, ablationMask);
+                    setResult(mockData);
+                    setLoading(false);
+                }, 800);
+            };
+
+            const suggestTopK = () => {
+                const matrix = result ? result.importance_scores.gradient_matrix : Array(12).fill().map(() => Array(12).fill().map(() => Math.random()));
+                const flat = [];
+                matrix.forEach((row, l) => row.forEach((s, h) => flat.push({l, h, s})));
+                flat.sort((a,b) => b.s - a.s);
+                
+                const newMask = Array(12).fill().map(() => Array(12).fill(false));
+                flat.slice(0, 5).forEach(item => newMask[item.l][item.h] = true);
+                
+                setAblationMask(newMask);
+                setGridMode('importance'); 
+                
+                if(!result) runInference();
+            };
+
+            const downloadReport = () => {
+                const text = `Attention Surgery Report\nPrompt: ${prompt}\nAblation Method: ${method}\nMetrics: ${JSON.stringify(result?.metrics || {})}`;
+                const blob = new Blob([text], { type: 'text/markdown' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'surgery_report.md';
+                a.click();
+            };
+
+            const ablatedCount = ablationMask.flat().filter(Boolean).length;
+
+            return (
+                <div className="min-h-screen flex bg-[#020617] text-slate-200 selection:bg-purple-500 selection:text-white">
+                    
+                    {/* --- Sidebar --- */}
+                    <div className="w-80 border-r border-slate-800 bg-slate-900/95 flex flex-col h-screen sticky top-0 z-50 shadow-2xl">
+                        <div className="p-6 border-b border-slate-800 bg-slate-900">
+                            <h1 className="text-xl font-bold bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent flex items-center gap-2">
+                                <Icon path={Icons.Activity} className="text-purple-400" />
+                                Attention Surgery
+                            </h1>
+                            <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-widest font-semibold pl-6">Mechanistic Workbench</p>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-6 space-y-8">
+                            
+                            {/* Prompt */}
+                            <div className="space-y-3">
+                                <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                                    <Icon path={Icons.FileText} /> Input Prompt
+                                </label>
+                                <textarea 
+                                    value={prompt}
+                                    onChange={(e) => setPrompt(e.target.value)}
+                                    className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-sm focus:ring-1 focus:ring-purple-500 focus:outline-none h-24 font-mono text-slate-300 resize-none shadow-inner placeholder-slate-600 transition-all focus:border-purple-500"
+                                    placeholder="Enter text to analyze..."
+                                />
+                            </div>
+
+                            {/* Config */}
+                            <div className="space-y-4">
+                                <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                                    <Icon path={Icons.Zap} /> Surgery Config
+                                </label>
+                                <div className="grid grid-cols-3 gap-1 p-1 bg-slate-800 rounded-lg border border-slate-700">
+                                    {['zero', 'mean', 'rand'].map(m => (
+                                        <button 
+                                            key={m}
+                                            onClick={() => setMethod(m)}
+                                            className={`text-[10px] py-1.5 rounded capitalize transition-all ${method === m ? 'bg-purple-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'}`}
+                                        >
+                                            {m}
+                                        </button>
+                                    ))}
+                                </div>
+                                <button 
+                                    onClick={suggestTopK}
+                                    className="w-full py-2 text-xs flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-750 border border-slate-700 hover:border-orange-500/50 rounded-md text-orange-400 transition-all group"
+                                >
+                                    <Icon path={Icons.Target} className="group-hover:animate-pulse" /> Suggest Top-5 Heads
+                                </button>
+                            </div>
+
+                            {/* View Toggle */}
+                            <div className="space-y-3">
+                                <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                                    <Icon path={Icons.Brain} /> Cortex View
+                                </label>
+                                <div className="flex bg-slate-800 p-1 rounded-lg border border-slate-700">
+                                    <button 
+                                        onClick={() => setGridMode('normal')}
+                                        className={`flex-1 py-1.5 text-[10px] rounded transition-all ${gridMode === 'normal' ? 'bg-slate-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                                    >
+                                        Structure
+                                    </button>
+                                    <button 
+                                        onClick={() => setGridMode('importance')}
+                                        className={`flex-1 py-1.5 text-[10px] rounded transition-all ${gridMode === 'importance' ? 'bg-orange-500 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                                    >
+                                        Importance
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Stats */}
+                            <div className="bg-slate-800/30 rounded-lg p-4 border border-slate-700/50 space-y-3">
+                                <div className="flex justify-between items-center">
+                                    <span className="text-xs text-slate-400">Active Heads</span>
+                                    <span className="text-sm font-mono text-emerald-400">{144 - ablatedCount}</span>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                    <span className="text-xs text-slate-400">Ablated</span>
+                                    <span className="text-sm font-bold font-mono text-rose-400">{ablatedCount}</span>
+                                </div>
+                                <div className="w-full bg-slate-700 h-1 rounded-full overflow-hidden">
+                                    <div className="bg-rose-500 h-full transition-all duration-500" style={{width: `${(ablatedCount/144)*100}%`}}></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="p-4 border-t border-slate-800 bg-slate-900">
+                            <button 
+                                onClick={downloadReport}
+                                className="w-full py-2.5 rounded-lg border border-slate-700 text-slate-400 hover:text-white hover:bg-slate-800 text-xs flex items-center justify-center gap-2 transition-all hover:border-purple-500/50"
+                            >
+                                <Icon path={Icons.Download} /> Export Report
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* --- Main Workspace --- */}
+                    <div className="flex-1 flex flex-col h-screen overflow-hidden relative">
+                        
+                        {/* Navbar */}
+                        <div className="h-16 border-b border-slate-800/60 bg-slate-900/80 backdrop-blur-md flex items-center px-8 justify-between sticky top-0 z-40">
+                            <div className="flex gap-1 bg-slate-800/50 p-1 rounded-lg border border-slate-700/50">
+                                {['surgery', 'impact', 'metrics'].map(tab => (
+                                    <button
+                                        key={tab}
+                                        onClick={() => setActiveTab(tab)}
+                                        className={`
+                                            px-4 py-1.5 rounded-md text-xs font-medium capitalize transition-all flex items-center gap-2
+                                            ${activeTab === tab ? 'bg-purple-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200'}
+                                        `}
+                                    >
+                                        {tab === 'surgery' && <Icon path={Icons.GitMerge} />}
+                                        {tab === 'impact' && <Icon path={Icons.BarChart2} />}
+                                        {tab === 'metrics' && <Icon path={Icons.Table} />}
+                                        {tab}
+                                    </button>
+                                ))}
+                            </div>
+
+                            <button 
+                                onClick={runInference}
+                                disabled={loading}
+                                className={`
+                                    px-6 py-2 rounded-full text-sm font-bold flex items-center gap-2 transition-all shadow-[0_0_20px_rgba(168,85,247,0.15)]
+                                    ${loading 
+                                        ? 'bg-slate-700 text-slate-500 cursor-not-allowed' 
+                                        : 'bg-gradient-to-r from-purple-600 to-pink-600 hover:scale-105 active:scale-95 text-white'}
+                                `}
+                            >
+                                {loading ? <Icon path={Icons.RefreshCw} className="animate-spin" /> : <Icon path={Icons.Play} fill="currentColor" />}
+                                {loading ? 'Running...' : 'Run Surgery'}
+                            </button>
+                        </div>
+
+                        {/* Scrollable Content */}
+                        <div className="flex-1 overflow-y-auto p-8">
+                            <div className="grid grid-cols-[340px_1fr] gap-8 max-w-[1600px] mx-auto">
+                                
+                                {/* Left Column: Grid + Vitals */}
+                                <div className="space-y-6">
+                                    <HeadGrid 
+                                        mask={ablationMask} 
+                                        importance={result?.importance_scores?.gradient_matrix} 
+                                        onToggle={toggleHead} 
+                                        mode={gridMode} 
+                                    />
+                                    
+                                    {/* Vitals Dashboard (Spec Section 8) */}
+                                    {result && (
+                                        <div className="animate-fade-in space-y-3">
+                                            <div className="flex items-center gap-2 text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                                                <Icon path={Icons.Activity} /> Vitals
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-3">
+                                                <MetricCard label="KL Divergence" value={result.metrics.kl_div} color="text-rose-400" />
+                                                <MetricCard label="PPL Δ" value={`+${result.metrics.perplexity_delta}`} color="text-orange-400" />
+                                                <MetricCard label="Top-1 Change" value={`${(result.metrics.top1_changed_ratio*100).toFixed(0)}%`} color="text-blue-400" />
+                                                <MetricCard label="L2 Diff" value={result.metrics.l2_diff} color="text-emerald-400" />
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Right Column: Tabs Content */}
+                                <div className="bg-slate-900/40 rounded-2xl border border-slate-800 p-6 min-h-[600px] relative overflow-hidden backdrop-blur-sm">
+                                    
+                                    {!result && !loading && (
+                                        <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-600 z-0">
+                                            <Icon path={Icons.Activity} className="w-16 h-16 mb-4 opacity-10" />
+                                            <p className="text-sm">Configure ablation and click "Run Surgery"</p>
+                                        </div>
+                                    )}
+
+                                    {/* Tab 1: Surgery Room (Diff View) */}
+                                    {activeTab === 'surgery' && result && (
+                                        <div className="animate-fade-in space-y-8">
+                                            <div>
+                                                <h3 className="text-sm font-semibold text-slate-400 mb-3 uppercase tracking-wider">Control Group</h3>
+                                                <div className="p-5 bg-slate-800/50 rounded-xl border border-slate-700/50">
+                                                    <TokenList tokens={result.generation.control_tokens} />
+                                                </div>
+                                            </div>
+
+                                            <div className="relative">
+                                                <div className="absolute -left-3 top-0 bottom-0 w-0.5 bg-gradient-to-b from-transparent via-rose-500/50 to-transparent"></div>
+                                                <h3 className="text-sm font-semibold text-rose-400 mb-3 uppercase tracking-wider flex items-center gap-2">
+                                                    <Icon path={Icons.AlertTriangle} /> Experimental Group
+                                                </h3>
+                                                <div className="p-5 bg-slate-900/80 rounded-xl border border-rose-900/30 shadow-inner">
+                                                    <TokenList tokens={result.generation.ablated_tokens} />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Tab 2: Impact Analysis (Charts) */}
+                                    {activeTab === 'impact' && result && (
+                                        <div className="animate-fade-in h-full flex flex-col">
+                                            <h3 className="text-lg font-bold mb-6 flex items-center gap-2">
+                                                <Icon path={Icons.BarChart2} className="text-orange-400" />
+                                                Logit Lens: Layer Contribution
+                                            </h3>
+                                            <div className="flex-1 min-h-[300px] bg-slate-800/20 rounded-xl p-4 border border-slate-700/50">
+                                                <ResponsiveContainer width="100%" height="100%">
+                                                    <BarChart data={result.layer_impact}>
+                                                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
+                                                        <XAxis dataKey="layer_name" stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} />
+                                                        <YAxis stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} />
+                                                        <Tooltip 
+                                                            cursor={{fill: 'rgba(255,255,255,0.05)'}}
+                                                            contentStyle={{ backgroundColor: '#1e293b', borderColor: '#334155', color: '#f8fafc', borderRadius: '8px' }}
+                                                        />
+                                                        <Bar dataKey="impact_score" fill="#818cf8" radius={[4, 4, 0, 0]} />
+                                                    </BarChart>
+                                                </ResponsiveContainer>
+                                            </div>
+                                            <p className="text-xs text-slate-500 mt-4 text-center">
+                                                Shows the euclidean distance of the residual stream at each layer relative to the final output embedding.
+                                            </p>
+                                        </div>
+                                    )}
+
+                                    {/* Tab 3: Metrics Room (Table) */}
+                                    {activeTab === 'metrics' && result && (
+                                        <div className="animate-fade-in">
+                                            <h3 className="text-lg font-bold mb-6 flex items-center gap-2">
+                                                <Icon path={Icons.Table} className="text-emerald-400" />
+                                                Detailed Head Metrics
+                                            </h3>
+                                            <div className="overflow-hidden rounded-xl border border-slate-700 shadow-lg">
+                                                <table className="w-full text-sm text-left text-slate-400">
+                                                    <thead className="text-xs text-slate-300 uppercase bg-slate-800">
+                                                        <tr>
+                                                            <th className="px-6 py-4 font-semibold">Head</th>
+                                                            <th className="px-6 py-4 text-right text-purple-400">Gradient</th>
+                                                            <th className="px-6 py-4 text-right text-orange-400">Ablation Δ</th>
+                                                            <th className="px-6 py-4">Hypothesis</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-slate-800">
+                                                        {[...Array(8)].map((_, i) => (
+                                                            <tr key={i} className="bg-slate-900/50 hover:bg-slate-800 transition-colors">
+                                                                <td className="px-6 py-3 font-mono text-slate-200">
+                                                                    L{Math.floor(Math.random()*12)}.H{Math.floor(Math.random()*12)}
+                                                                </td>
+                                                                <td className="px-6 py-3 text-right font-mono">{(Math.random()).toFixed(3)}</td>
+                                                                <td className="px-6 py-3 text-right font-mono">{(Math.random()*0.5).toFixed(3)}</td>
+                                                                <td className="px-6 py-3">
+                                                                    <span className="px-2 py-1 rounded-full text-[10px] bg-slate-800 border border-slate-700">
+                                                                        {['Induction', 'Previous', 'Backup'][Math.floor(Math.random()*3)]}
+                                                                    </span>
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
